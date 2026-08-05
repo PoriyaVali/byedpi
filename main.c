@@ -27,7 +27,7 @@
     #define close(fd) closesocket(fd)
 #endif
 
-#define VERSION "17.3"
+#define VERSION "17.3-dm (Doctor Mobile / Mirage core, fork of byedpi)"
 
 ASSERT(sizeof(struct in_addr) == 4)
 ASSERT(sizeof(struct in6_addr) == 16)

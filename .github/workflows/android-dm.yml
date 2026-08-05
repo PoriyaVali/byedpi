@@ -1,0 +1,61 @@
+name: Android (Doctor Mobile / Mirage)
+
+# Builds our byedpi fork ("Mirage" DPI-evasion core) for Android as a
+# per-ABI libbyedpi.so, so the Flutter app can drop it into jniLibs the same
+# way it fetches mihomo/mdns. Pure C via the NDK clang. Publishes on a v*-dm* tag.
+on:
+  push:
+    tags: ['v*-dm*']
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { abi: arm64-v8a,   target: aarch64-linux-android24 }
+          - { abi: armeabi-v7a, target: armv7a-linux-androideabi24 }
+          - { abi: x86_64,      target: x86_64-linux-android24 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r28
+      - name: Build libbyedpi.so (${{ matrix.abi }})
+        run: |
+          CLANG="${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/clang"
+          make clean || true
+          make CC="$CLANG --target=${{ matrix.target }}"
+          mv ciadpi libbyedpi.so
+          file libbyedpi.so || true
+          ls -la libbyedpi.so
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libbyedpi-${{ matrix.abi }}
+          path: libbyedpi.so
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Stage per-abi assets
+        run: |
+          mkdir -p out
+          for d in artifacts/libbyedpi-*; do
+            abi="${d##*libbyedpi-}"
+            cp "$d/libbyedpi.so" "out/libbyedpi-$abi.so"
+          done
+          ls -la out
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: out/libbyedpi-*.so
