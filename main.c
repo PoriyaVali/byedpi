@@ -1376,7 +1376,33 @@ int main(int argc, char **argv)
         }
     }
     
-    int status = parse_args(argc, argv);
+    // Doctor Mobile: --dm expands to our measured winning auto-desync chain
+    // (real Irancell, 2026-08-05, best-first). byedpi tries each group, advances
+    // on reset/ssl-error/timeout, and caches the winning params per destination
+    // IP — so integrations can just run the core with `--dm` and get the best
+    // per-network behaviour with no magic args.
+    static const char *DM_ARGS[] = {
+        "--fake", "1+s", "--ttl", "6", "--tlsrec", "1+s",
+        "-A", "torst,ssl_err", "--oob", "1+s", "--disorder", "1+s",
+        "-A", "torst,ssl_err", "--tlsrec", "1+s",
+        "-A", "torst,ssl_err", "--split", "1+s", "--disorder", "3+s",
+        "-T", "3", "-u", "3600",
+    };
+    int p_argc = argc;
+    char **p_argv = argv;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--dm")) continue;
+        int extra = (int)(sizeof(DM_ARGS) / sizeof(DM_ARGS[0]));
+        p_argc = argc - 1 + extra;
+        p_argv = calloc(p_argc + 1, sizeof(char *));
+        if (!p_argv) { clear_params(cmd_line, argv); return -1; }
+        int k = 0;
+        for (int j = 0; j < i; j++) p_argv[k++] = argv[j];
+        for (int j = 0; j < extra; j++) p_argv[k++] = (char *)DM_ARGS[j];
+        for (int j = i + 1; j < argc; j++) p_argv[k++] = argv[j];
+        break;
+    }
+    int status = parse_args(p_argc, p_argv);
     if (status) {
         clear_params(cmd_line, argv);
         return status - 1;
