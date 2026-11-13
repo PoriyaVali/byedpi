@@ -10,7 +10,11 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # The MIPS cross compilers are gone from the current ubuntu-latest image
+    # (apt could not install them, 2026-11-13); 22.04 still ships them. Every
+    # other target stays on latest. A failed leg skips the release job below,
+    # so one missing toolchain used to withhold every binary, Windows included.
+    runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
@@ -18,8 +22,8 @@ jobs:
           - { name: linux-amd64,   cc: gcc,                     apt: gcc }
           - { name: linux-arm64,   cc: aarch64-linux-gnu-gcc,   apt: gcc-aarch64-linux-gnu }
           - { name: linux-armv7,   cc: arm-linux-gnueabihf-gcc, apt: gcc-arm-linux-gnueabihf }
-          - { name: linux-mipsle,  cc: mipsel-linux-gnu-gcc,    apt: gcc-mipsel-linux-gnu }
-          - { name: linux-mips,    cc: mips-linux-gnu-gcc,      apt: gcc-mips-linux-gnu }
+          - { name: linux-mipsle,  cc: mipsel-linux-gnu-gcc,    apt: gcc-mipsel-linux-gnu, os: ubuntu-22.04 }
+          - { name: linux-mips,    cc: mips-linux-gnu-gcc,      apt: gcc-mips-linux-gnu, os: ubuntu-22.04 }
           - { name: windows-amd64, cc: x86_64-w64-mingw32-gcc,  apt: gcc-mingw-w64-x86-64, win: '1' }
     steps:
       - uses: actions/checkout@v4
