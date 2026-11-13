@@ -517,6 +517,70 @@ static void tamp(char *buffer, size_t bfsize, ssize_t *n,
 }
 
 
+
+/*
+ * Doctor Mobile: a ClientHello the client already cut into several TLS
+ * records - Mirage, in our sing-box (common/tlsfragment) and mihomo
+ * (component/mirage) - each record in its own write.
+ *
+ * Fills ends[] with where each complete handshake record ends and returns
+ * how many there are, or 0 when buffer does not start with a ClientHello
+ * split across more than one record. *whole is set when the records seen
+ * hold the entire handshake message.
+ */
+static int chello_records(const char *buffer, ssize_t n,
+        long *ends, int max, bool *whole)
+{
+    *whole = 0;
+    if (!is_tls_chello(buffer, n) || n < 9) {
+        return 0;
+    }
+    long need = 4 + (((uint8_t )buffer[6] << 16)
+        | ((uint8_t )buffer[7] << 8) | (uint8_t )buffer[8]);
+    if (ANTOHS(buffer, 3) >= need) {
+        return 0;
+    }
+    long pos = 0, got = 0;
+    int k = 0;
+    while (k < max && pos + 5 <= n
+            && buffer[pos] == 0x16 && buffer[pos + 1] == 0x03) {
+        long len = ANTOHS(buffer, pos + 3);
+        if (pos + 5 + len > n) {
+            break;
+        }
+        pos += 5 + len;
+        got += len;
+        ends[k++] = pos;
+        if (got >= need) {
+            *whole = 1;
+            break;
+        }
+    }
+    return k > 1 ? k : 0;
+}
+
+
+/*
+ * Joins the first k records into one, so that every SNI-relative position
+ * and --tlsrec work on the ClientHello as if it had arrived whole. Only the
+ * record framing changes; the handshake message is untouched.
+ */
+static ssize_t merge_chello(char *buffer, ssize_t n, const long *ends, int k)
+{
+    long total = ANTOHS(buffer, 3);
+    long w = ends[0];
+    for (int i = 1; i < k; i++) {
+        long start = ends[i - 1] + 5;
+        long len = ends[i] - start;
+        memmove(buffer + w, buffer + start, len);
+        w += len;
+        total += len;
+    }
+    memmove(buffer + w, buffer + ends[k - 1], n - ends[k - 1]);
+    SHTONA(buffer, 3, total);
+    return n - 5 * (k - 1);
+}
+
 ssize_t desync(struct poolhd *pool, 
         struct eval *val, struct buffer *buff, ssize_t *np, bool *wait)
 {
@@ -531,6 +595,44 @@ ssize_t desync(struct poolhd *pool,
     
     ssize_t skip = val->pair->round_sent;
     unsigned int part_skip = val->pair->part_sent;
+    
+    /*
+     * A ClientHello that arrives already split into records (Mirage):
+     *
+     * - A group that changes the hello (split, disorder, oob, fake, tlsrec,
+     *   tlsminor) gets it merged back into one record first. Its positions
+     *   are relative to the SNI, which parse_tls only finds inside a single
+     *   record: on the split hello every one of them resolved to nothing, so
+     *   the group sent the records unchanged, in one write.
+     * - A group that changes nothing forwards the records one write each, as
+     *   the client wrote them. Sent in one write they are the form Hamrah-e
+     *   Aval drops in silence (see mirage.go in the cores), which a plain
+     *   pass-through produced whenever both records were read at once.
+     *
+     * Only when the merged record still fits a TLS record, and only for a
+     * whole hello; a partial one is left as it is.
+     */
+    long rec_ends[8];
+    bool rec_whole = 0;
+    int recs = chello_records(buffer, *np, rec_ends, 8, &rec_whole);
+    bool changes = dp.parts_n || dp.tlsrec_n || dp.tlsminor_set;
+    struct part rec_parts[7];
+    
+    if (recs && changes) {
+        if (!skip && rec_whole
+                && rec_ends[recs - 1] - 5 * recs <= 16384) {
+            *np = merge_chello(buffer, *np, rec_ends, recs);
+            LOG(LOG_S, "merged %d TLS records\n", recs);
+        }
+    }
+    else if (recs) {
+        for (int k = 0; k < recs - 1; k++) {
+            rec_parts[k] = (struct part ){ .m = DESYNC_SPLIT,
+                .pos = rec_ends[k], .r = 1 };
+        }
+        dp.parts = rec_parts;
+        dp.parts_n = recs - 1;
+    }
     
     if (!skip && LOG_ENABLED) {
         init_proto_info(buffer, *np, &info);

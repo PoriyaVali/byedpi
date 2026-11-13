@@ -26,6 +26,31 @@ Also strong: `--oob 1+s --disorder 1+s`, and byedpi's native **auto** mode
 (`-A torst,ssl_err ...`) which detects a reset and rotates desync params,
 caching the working one per destination IP — a self-tuning default.
 
+## Mirage-shaped ClientHellos (17.3-dm3)
+Our sing-box and mihomo can cut the ClientHello into TLS records themselves
+("Mirage": a 10-byte first record ending before the SNI, then the rest, each in
+its own write - measured to pass Hamrah-e Aval, which drops the single-write
+form). byedpi sits after them when both are on, and it used to break that:
+
+- `parse_tls` only finds the SNI inside one record, so on a split hello every
+  `+s` position resolved to nothing and the desync groups sent the records
+  unchanged, **in one write** - no desync, and the shape MCI drops.
+- A plain group forwarded whatever one read returned, so both records left in
+  one write whenever they were read together (timing-dependent).
+
+Now (desync.c `chello_records` / `merge_chello`): a group that changes the
+hello merges the records back into one first, so its SNI positions and
+`--tlsrec` work; a plain group forwards the records one write each. Captured on
+loopback with the real mihomo core and this build: first try `10 + 1516`
+(Mirage kept), retry `118 + 2 + 1401` (merged, split at the SNI); before, both
+were a single 1526-byte segment. Real TLS 1.3 handshakes completed through
+split, tlsrec, split+disorder and plain, with Mirage in both write modes. A
+hello that is not split into records is handled exactly as before.
+
+Trade-off: through byedpi a split hello always leaves one record per write, so
+the cores' `DM_MIRAGE_COALESCE=1` (single-write form) has no effect here - byedpi
+cannot tell one client write from two that it read together.
+
 ## Build
 Pure C, `make`.
 - Linux / Android / router: `make CC=<target-gcc-or-ndk-clang>`
